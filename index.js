@@ -2,6 +2,7 @@ const { default: makeWASocket, useMultiFileAuthState, disconnectReason } = requi
 const express = require('express');
 const axios = require('axios');
 const pino = require('pino');
+const qrcode = require('qrcode-terminal'); // Esta es la pieza clave
 
 const app = express();
 app.use(express.json());
@@ -9,37 +10,27 @@ const port = 3000;
 
 async function startWhatsApp() {
     console.log("Iniciando conexión con WhatsApp...");
-    // Intentará guardar la sesión en la carpeta 'auth_info'
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     
     const sock = makeWASocket({
         auth: state,
-        logger: pino({ level: 'info' }), 
-        printQRInTerminal: true
+        logger: pino({ level: 'silent' }), // Silenciamos logs internos para ver mejor el QR
+        printQRInTerminal: false // Lo ponemos en false porque lo haremos nosotros manualmente
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('messages.upsert', async ({ messages }) => {
-        const msg = messages[0];
-        if (!msg.key.fromMe && msg.message) {
-            const texto = msg.message.conversation || msg.message.extendedTextMessage?.text;
-            if (texto) {
-                console.log("Mensaje recibido:", texto);
-                // Si aún no tienes n8n configurado, esto fallará pero no detendrá la app
-                try {
-                    await axios.post('https://webhook.site/test', { // Cambia esto por tu n8n luego
-                        sender: msg.key.remoteJid,
-                        text: texto
-                    });
-                } catch (e) { console.log("n8n no disponible todavía"); }
-            }
-        }
-    });
-
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
-        if (qr) console.log("NUEVO CÓDIGO QR GENERADO. MIRA LOS LOGS.");
+
+        // ESTA PARTE DIBUJA EL QR
+        if (qr) {
+            console.log("========================================");
+            console.log("ESCANEA ESTE CÓDIGO QR CON TU WHATSAPP:");
+            console.log("========================================");
+            qrcode.generate(qr, { small: true });
+            console.log("========================================");
+        }
         
         if (connection === 'close') {
             const shouldReconnect = lastDisconnect.error?.output?.statusCode !== disconnectReason.loggedOut;
@@ -49,7 +40,24 @@ async function startWhatsApp() {
         }
     });
 
-    // Ruta para enviar mensajes desde n8n
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+        const msg = messages[0];
+        if (!msg.key.fromMe && msg.message) {
+            const texto = msg.message.conversation || msg.message.extendedTextMessage?.text;
+            if (texto) {
+                console.log("Mensaje de " + msg.pushName + ": " + texto);
+                try {
+                    // Cambia esta URL por la de tu n8n cuando la tengas
+                    await axios.post('https://neogen-n8n-chatwoot.8fevsr.easypanel.host', { 
+                        sender: msg.key.remoteJid,
+                        nombre: msg.pushName,
+                        texto: texto
+                    });
+                } catch (e) { /* Error silencioso si n8n no responde */ }
+            }
+        }
+    });
+
     app.post('/send', async (req, res) => {
         const { jid, message } = req.body;
         try {
