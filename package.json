@@ -1,0 +1,16 @@
+{
+  "name": "mi-puente-whatsapp",
+  "version": "1.0.0",
+  "description": "Puente personalizado",
+  "main": "index.js",
+  "dependencies": {
+    "@whiskeysockets/baileys": "latest",
+    "express": "^4.18.2",
+    "axios": "^1.6.0",
+    "qrcode-terminal": "^0.12.0",
+    "pino": "^8.16.0"
+  },
+  "scripts": {
+    "start": "node index.js"
+  }
+}
