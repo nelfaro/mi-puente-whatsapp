@@ -1,4 +1,4 @@
-FROM node:18-slim
+FROM node:20-slim
 
 # Instalamos ffmpeg Y git (que es lo que faltaba)
 RUN apt-get update && apt-get install -y ffmpeg git
@@ -15,3 +15,4 @@ COPY . .
 EXPOSE 3000
 
 CMD ["npm", "start"]
+
