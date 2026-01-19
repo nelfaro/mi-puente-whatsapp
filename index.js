@@ -43,7 +43,7 @@ async function startWhatsApp() {
                 console.log(`Enviando a n8n mensaje de ${msg.pushName}: ${texto}`);
                 try {
                     // ASEGÚRATE DE QUE ESTA URL SEA LA DE TU WEBHOOK DE n8n (PRODUCTION URL)
-                    const response = await axios.post('TU_URL_PRODUCTION_DE_N8N', { 
+                    const response = await axios.post('https://neogen-n8n-n8n.8fevsr.easypanel.host/webhook/whatsapp-entrada', { 
                         sender: msg.key.remoteJid,
                         nombre: msg.pushName || 'Contacto de WhatsApp',
                         texto: texto
@@ -71,3 +71,4 @@ app.listen(port, "0.0.0.0", () => {
     console.log(`Servidor escuchando en puerto ${port}`);
     startWhatsApp().catch(err => console.log("Error inicial:", err));
 });
+
