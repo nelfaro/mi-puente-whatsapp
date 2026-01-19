@@ -2,7 +2,7 @@ const { default: makeWASocket, useMultiFileAuthState, disconnectReason } = requi
 const express = require('express');
 const axios = require('axios');
 const pino = require('pino');
-const qrcode = require('qrcode-terminal'); // Esta es la pieza clave
+const qrcode = require('qrcode-terminal');
 
 const app = express();
 app.use(express.json());
@@ -14,26 +14,21 @@ async function startWhatsApp() {
     
     const sock = makeWASocket({
         auth: state,
-        logger: pino({ level: 'silent' }), // Silenciamos logs internos para ver mejor el QR
-        printQRInTerminal: false // Lo ponemos en false porque lo haremos nosotros manualmente
+        logger: pino({ level: 'silent' }),
+        printQRInTerminal: false 
     });
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
-
-        // ESTA PARTE DIBUJA EL QR
-        if (qr) {
-            console.log("========================================");
-            console.log("ESCANEA ESTE CÓDIGO QR CON TU WHATSAPP:");
-            console.log("========================================");
-            qrcode.generate(qr, { small: true });
-            console.log("========================================");
-        }
+        if (qr) qrcode.generate(qr, { small: true });
         
         if (connection === 'close') {
-            const shouldReconnect = lastDisconnect.error?.output?.statusCode !== disconnectReason.loggedOut;
+            // Arreglo del error TypeError:
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const shouldReconnect = statusCode !== disconnectReason.loggedOut;
+            console.log("Conexión cerrada. ¿Reconectando?:", shouldReconnect);
             if (shouldReconnect) startWhatsApp();
         } else if (connection === 'open') {
             console.log('¡CONECTADO A WHATSAPP EXITOSAMENTE!');
@@ -45,15 +40,18 @@ async function startWhatsApp() {
         if (!msg.key.fromMe && msg.message) {
             const texto = msg.message.conversation || msg.message.extendedTextMessage?.text;
             if (texto) {
-                console.log("Mensaje de " + msg.pushName + ": " + texto);
+                console.log(`Enviando a n8n mensaje de ${msg.pushName}: ${texto}`);
                 try {
-                    // Cambia esta URL por la de tu n8n cuando la tengas
-                    await axios.post('https://neogen-n8n-n8n.8fevsr.easypanel.host/webhook/whatsapp-entrada', { 
+                    // ASEGÚRATE DE QUE ESTA URL SEA LA DE TU WEBHOOK DE n8n (PRODUCTION URL)
+                    const response = await axios.post('TU_URL_PRODUCTION_DE_N8N', { 
                         sender: msg.key.remoteJid,
-                        nombre: msg.pushName,
+                        nombre: msg.pushName || 'Contacto de WhatsApp',
                         texto: texto
                     });
-                } catch (e) { /* Error silencioso si n8n no responde */ }
+                    console.log("Respuesta de n8n:", response.status); 
+                } catch (e) { 
+                    console.error("ERROR AL ENVIAR A n8n:", e.message); 
+                }
             }
         }
     });
@@ -69,10 +67,7 @@ async function startWhatsApp() {
     });
 }
 
-app.get('/', (req, res) => res.send('Puente Activo'));
-
 app.listen(port, "0.0.0.0", () => {
     console.log(`Servidor escuchando en puerto ${port}`);
     startWhatsApp().catch(err => console.log("Error inicial:", err));
 });
-
