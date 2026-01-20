@@ -21,6 +21,7 @@ let sock = null;
 
 async function startWhatsApp() {
     console.log(`\n> Iniciando Instancia: [${INSTANCE_NAME}]`);
+    
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_FOLDER);
     
     sock = makeWASocket({
@@ -32,23 +33,34 @@ async function startWhatsApp() {
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
+        
         if (qr) {
             QRCode.toDataURL(qr, (err, url) => { qrCodeData = url; });
             qrcodeTerminal.generate(qr, { small: true });
         }
+        
         if (connection === 'close') {
             connectionStatus = "Desconectado";
             qrCodeData = null;
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
-                if (fs.existsSync(SESSION_FOLDER)) { fs.rmSync(SESSION_FOLDER, { recursive: true, force: true }); }
-                setTimeout(() => startWhatsApp(), 3000);
-            } else {
+            
+            // Si el usuario cerró sesión, limpiamos y esperamos acción manual o reinicio automático suave
+            if (statusCode === DisconnectReason.loggedOut) {
+                console.log(`❌ Sesión cerrada en ${INSTANCE_NAME}.`);
+                if (fs.existsSync(SESSION_FOLDER)) {
+                    fs.rmSync(SESSION_FOLDER, { recursive: true, force: true });
+                }
+            }
+            
+            // Intentar reconectar siempre que no sea un cierre voluntario total
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            if (shouldReconnect) {
                 setTimeout(() => startWhatsApp(), 3000);
             }
         } else if (connection === 'open') {
             connectionStatus = "Conectado";
             qrCodeData = null;
+            console.log(`✅ [${INSTANCE_NAME}] CONECTADO`);
         }
     });
 
@@ -70,11 +82,10 @@ async function startWhatsApp() {
     });
 }
 
+// INTERFAZ WEB
 app.get('/', (req, res) => {
-    // Definimos el color y texto del botón según el estado
     const btnColor = connectionStatus === 'Conectado' ? '#FF3B30' : '#007AFF';
-    const btnText = connectionStatus === 'Conectado' ? 'Desconectar WhatsApp' : 'Reiniciar / Nuevo QR';
-    const confirmMsg = connectionStatus === 'Conectado' ? '¿Estás seguro de que quieres desconectar?' : '¿Quieres generar un nuevo código QR?';
+    const btnText = connectionStatus === 'Conectado' ? 'Desconectar WhatsApp' : 'Generar Nuevo QR';
 
     res.send(`
         <!DOCTYPE html>
@@ -95,7 +106,7 @@ app.get('/', (req, res) => {
                 <h1>${INSTANCE_NAME}</h1>
                 <div class="status">● ${connectionStatus}</div>
                 ${qrCodeData ? `<div>Escanea el QR:</div><img src="${qrCodeData}">` : connectionStatus === 'Conectado' ? '<div style="font-size: 4rem;">✅</div><p>WhatsApp vinculado.</p>' : '<p>Generando código QR...</p>'}
-                <form action="/logout" method="POST" onsubmit="return confirm('${confirmMsg}')">
+                <form action="/logout" method="POST">
                     <button class="btn" type="submit">${btnText}</button>
                 </form>
                 <br>
@@ -108,15 +119,33 @@ app.get('/', (req, res) => {
 
 app.post('/logout', async (req, res) => {
     try {
-        if (fs.existsSync(SESSION_FOLDER)) { fs.rmSync(SESSION_FOLDER, { recursive: true, force: true }); }
-        res.send('<script>alert("Acción realizada"); window.location.href="/";</script>');
-        process.exit(0);
-    } catch (e) { res.send('Error.'); }
+        console.log(`Acción de limpieza solicitada para ${INSTANCE_NAME}`);
+        
+        // 1. Intentamos cerrar la conexión limpiamente si existe
+        if (sock) {
+            sock.end(new Error("Reinicio solicitado"));
+        }
+
+        // 2. Borramos la carpeta de sesión
+        if (fs.existsSync(SESSION_FOLDER)) {
+            fs.rmSync(SESSION_FOLDER, { recursive: true, force: true });
+        }
+
+        // 3. Esperamos un poco y reiniciamos el proceso de WhatsApp sin apagar el servidor
+        setTimeout(() => {
+            startWhatsApp();
+        }, 2000);
+
+        res.send('<script>alert("Reiniciando instancia..."); window.location.href="/";</script>');
+    } catch (e) { 
+        res.send('Error al reiniciar.'); 
+    }
 });
 
 app.post('/send', async (req, res) => {
     const { jid, message } = req.body;
     try {
+        if (!sock) throw new Error("WhatsApp no iniciado");
         await sock.sendMessage(jid, { text: message });
         res.json({ status: 'sent' });
     } catch (e) { res.status(500).json({ error: e.message }); }
