@@ -4,7 +4,7 @@ const axios = require('axios');
 const pino = require('pino');
 const QRCode = require('qrcode');
 const qrcodeTerminal = require('qrcode-terminal');
-const fs = require('fs'); // Librería para manejar archivos
+const fs = require('fs');
 
 const app = express();
 app.use(express.json());
@@ -21,7 +21,6 @@ let sock = null;
 
 async function startWhatsApp() {
     console.log(`\n> Iniciando Instancia: [${INSTANCE_NAME}]`);
-    
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_FOLDER);
     
     sock = makeWASocket({
@@ -33,32 +32,23 @@ async function startWhatsApp() {
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
-        
         if (qr) {
             QRCode.toDataURL(qr, (err, url) => { qrCodeData = url; });
             qrcodeTerminal.generate(qr, { small: true });
         }
-        
         if (connection === 'close') {
             connectionStatus = "Desconectado";
             qrCodeData = null;
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            
-            // Si la sesión está cerrada o corrupta, borramos la carpeta y reiniciamos
             if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
-                console.log(`❌ Sesión inválida en ${INSTANCE_NAME}. Limpiando archivos...`);
-                if (fs.existsSync(SESSION_FOLDER)) {
-                    fs.rmSync(SESSION_FOLDER, { recursive: true, force: true });
-                }
+                if (fs.existsSync(SESSION_FOLDER)) { fs.rmSync(SESSION_FOLDER, { recursive: true, force: true }); }
                 setTimeout(() => startWhatsApp(), 3000);
             } else {
-                console.log(`Reconectando ${INSTANCE_NAME}...`);
                 setTimeout(() => startWhatsApp(), 3000);
             }
         } else if (connection === 'open') {
             connectionStatus = "Conectado";
             qrCodeData = null;
-            console.log(`✅ [${INSTANCE_NAME}] CONECTADO`);
         }
     });
 
@@ -81,6 +71,11 @@ async function startWhatsApp() {
 }
 
 app.get('/', (req, res) => {
+    // Definimos el color y texto del botón según el estado
+    const btnColor = connectionStatus === 'Conectado' ? '#FF3B30' : '#007AFF';
+    const btnText = connectionStatus === 'Conectado' ? 'Desconectar WhatsApp' : 'Reiniciar / Nuevo QR';
+    const confirmMsg = connectionStatus === 'Conectado' ? '¿Estás seguro de que quieres desconectar?' : '¿Quieres generar un nuevo código QR?';
+
     res.send(`
         <!DOCTYPE html>
         <html>
@@ -92,16 +87,16 @@ app.get('/', (req, res) => {
                 .card { background: white; padding: 2rem; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); text-align: center; width: 90%; max-width: 400px; }
                 .status { font-size: 1.2rem; font-weight: bold; margin-bottom: 1rem; color: ${connectionStatus === 'Conectado' ? '#25D366' : '#FF3B30'}; }
                 img { width: 250px; margin: 1rem 0; border: 1px solid #ddd; padding: 10px; border-radius: 10px; }
-                .btn { background: #FF3B30; color: white; border: none; padding: 12px 25px; border-radius: 10px; cursor: pointer; font-size: 1rem; width: 100%; transition: 0.3s; }
+                .btn { background: ${btnColor}; color: white; border: none; padding: 12px 25px; border-radius: 10px; cursor: pointer; font-size: 1rem; width: 100%; transition: 0.3s; }
             </style>
         </head>
         <body>
             <div class="card">
                 <h1>${INSTANCE_NAME}</h1>
                 <div class="status">● ${connectionStatus}</div>
-                ${qrCodeData ? `<div>Escanea el QR:</div><img src="${qrCodeData}">` : connectionStatus === 'Conectado' ? '✅ Conectado' : '<p>Generando código QR...</p>'}
-                <form action="/logout" method="POST">
-                    <button class="btn" type="submit">Desconectar WhatsApp</button>
+                ${qrCodeData ? `<div>Escanea el QR:</div><img src="${qrCodeData}">` : connectionStatus === 'Conectado' ? '<div style="font-size: 4rem;">✅</div><p>WhatsApp vinculado.</p>' : '<p>Generando código QR...</p>'}
+                <form action="/logout" method="POST" onsubmit="return confirm('${confirmMsg}')">
+                    <button class="btn" type="submit">${btnText}</button>
                 </form>
                 <br>
                 <a href="#" onclick="location.reload()" style="font-size: 0.8rem; color: #888;">Actualizar Estado</a>
@@ -113,12 +108,10 @@ app.get('/', (req, res) => {
 
 app.post('/logout', async (req, res) => {
     try {
-        if (fs.existsSync(SESSION_FOLDER)) {
-            fs.rmSync(SESSION_FOLDER, { recursive: true, force: true });
-        }
-        res.send('<script>alert("Sesión borrada"); window.location.href="/";</script>');
-        process.exit(0); // Forzamos reinicio para limpiar socket
-    } catch (e) { res.send('Error al cerrar sesión.'); }
+        if (fs.existsSync(SESSION_FOLDER)) { fs.rmSync(SESSION_FOLDER, { recursive: true, force: true }); }
+        res.send('<script>alert("Acción realizada"); window.location.href="/";</script>');
+        process.exit(0);
+    } catch (e) { res.send('Error.'); }
 });
 
 app.post('/send', async (req, res) => {
