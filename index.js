@@ -17,11 +17,11 @@ const SESSION_FOLDER = `./session_${INSTANCE_NAME.replace(/\s+/g, '_')}`;
 
 let qrCodeData = null;
 let connectionStatus = "Desconectado";
+let userNumber = null;
 let sock = null;
 
 async function startWhatsApp() {
     console.log(`\n> Iniciando Instancia: [${INSTANCE_NAME}]`);
-    
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_FOLDER);
     
     sock = makeWASocket({
@@ -35,6 +35,7 @@ async function startWhatsApp() {
         const { connection, lastDisconnect, qr } = update;
         
         if (qr) {
+            connectionStatus = "Esperando Escaneo";
             QRCode.toDataURL(qr, (err, url) => { qrCodeData = url; });
             qrcodeTerminal.generate(qr, { small: true });
         }
@@ -42,25 +43,24 @@ async function startWhatsApp() {
         if (connection === 'close') {
             connectionStatus = "Desconectado";
             qrCodeData = null;
+            userNumber = null;
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            
-            // Si el usuario cerró sesión, limpiamos y esperamos acción manual o reinicio automático suave
-            if (statusCode === DisconnectReason.loggedOut) {
-                console.log(`❌ Sesión cerrada en ${INSTANCE_NAME}.`);
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            if (shouldReconnect) {
+                setTimeout(() => startWhatsApp(), 3000);
+            } else {
                 if (fs.existsSync(SESSION_FOLDER)) {
                     fs.rmSync(SESSION_FOLDER, { recursive: true, force: true });
                 }
-            }
-            
-            // Intentar reconectar siempre que no sea un cierre voluntario total
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) {
                 setTimeout(() => startWhatsApp(), 3000);
             }
         } else if (connection === 'open') {
             connectionStatus = "Conectado";
             qrCodeData = null;
-            console.log(`✅ [${INSTANCE_NAME}] CONECTADO`);
+            // Extraer el número de teléfono conectado
+            const id = sock.user.id.split(':')[0];
+            userNumber = id;
+            console.log(`✅ [${INSTANCE_NAME}] CONECTADO: ${userNumber}`);
         }
     });
 
@@ -82,11 +82,17 @@ async function startWhatsApp() {
     });
 }
 
+// API PARA QUE LA UI SEPA EL ESTADO EN TIEMPO REAL
+app.get('/status', (req, res) => {
+    res.json({
+        status: connectionStatus,
+        qr: qrCodeData,
+        number: userNumber
+    });
+});
+
 // INTERFAZ WEB
 app.get('/', (req, res) => {
-    const btnColor = connectionStatus === 'Conectado' ? '#FF3B30' : '#007AFF';
-    const btnText = connectionStatus === 'Conectado' ? 'Desconectar WhatsApp' : 'Generar Nuevo QR';
-
     res.send(`
         <!DOCTYPE html>
         <html>
@@ -96,22 +102,85 @@ app.get('/', (req, res) => {
             <style>
                 body { font-family: sans-serif; background: #f4f7f6; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
                 .card { background: white; padding: 2rem; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); text-align: center; width: 90%; max-width: 400px; }
-                .status { font-size: 1.2rem; font-weight: bold; margin-bottom: 1rem; color: ${connectionStatus === 'Conectado' ? '#25D366' : '#FF3B30'}; }
+                .status-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+                .Connected { color: #25D366; } .Disconnected, .Esperando { color: #FF3B30; }
+                .connected-icon { font-size: 4rem; color: #25D366; margin-bottom: 10px; }
                 img { width: 250px; margin: 1rem 0; border: 1px solid #ddd; padding: 10px; border-radius: 10px; }
-                .btn { background: ${btnColor}; color: white; border: none; padding: 12px 25px; border-radius: 10px; cursor: pointer; font-size: 1rem; width: 100%; transition: 0.3s; }
+                .btn { color: white; border: none; padding: 12px 25px; border-radius: 10px; cursor: pointer; font-size: 1rem; width: 100%; transition: 0.3s; margin-top: 15px; }
+                .btn-red { background: #FF3B30; } .btn-blue { background: #007AFF; }
+                .hidden { display: none; }
+                #phone-number { font-size: 1.1rem; font-weight: bold; color: #444; margin: 10px 0; }
             </style>
         </head>
         <body>
             <div class="card">
-                <h1>${INSTANCE_NAME}</h1>
-                <div class="status">● ${connectionStatus}</div>
-                ${qrCodeData ? `<div>Escanea el QR:</div><img src="${qrCodeData}">` : connectionStatus === 'Conectado' ? '<div style="font-size: 4rem;">✅</div><p>WhatsApp vinculado.</p>' : '<p>Generando código QR...</p>'}
-                <form action="/logout" method="POST">
-                    <button class="btn" type="submit">${btnText}</button>
+                <h1 style="margin-top:0">${INSTANCE_NAME}</h1>
+                <div id="status-container" class="status">Cargando...</div>
+                
+                <div id="qr-container" class="hidden">
+                    <p>Escanea el código QR:</p>
+                    <img id="qr-img" src="">
+                </div>
+
+                <div id="connected-container" class="hidden">
+                    <div class="connected-icon">✅</div>
+                    <p>Dispositivo vinculado:</p>
+                    <div id="phone-number"></div>
+                </div>
+
+                <div id="loading-container">
+                    <p>Iniciando servicio...</p>
+                </div>
+
+                <form action="/logout" method="POST" onsubmit="return confirm('¿Confirmar acción?')">
+                    <button id="action-btn" class="btn" type="submit">Cargando...</button>
                 </form>
-                <br>
-                <a href="#" onclick="location.reload()" style="font-size: 0.8rem; color: #888;">Actualizar Estado</a>
             </div>
+
+            <script>
+                async function updateStatus() {
+                    try {
+                        const res = await fetch('/status');
+                        const data = await res.json();
+                        
+                        const statusContainer = document.getElementById('status-container');
+                        const qrContainer = document.getElementById('qr-container');
+                        const connectedContainer = document.getElementById('connected-container');
+                        const loadingContainer = document.getElementById('loading-container');
+                        const actionBtn = document.getElementById('action-btn');
+                        const qrImg = document.getElementById('qr-img');
+                        const phoneDisplay = document.getElementById('phone-number');
+
+                        statusContainer.innerHTML = '<span class="status-dot" style="background:' + (data.status === 'Conectado' ? '#25D366' : '#FF3B30') + '"></span>' + data.status;
+                        statusContainer.className = 'status ' + data.status;
+
+                        if (data.status === 'Conectado') {
+                            connectedContainer.classList.remove('hidden');
+                            qrContainer.classList.add('hidden');
+                            loadingContainer.classList.add('hidden');
+                            phoneDisplay.innerText = '+' + data.number;
+                            actionBtn.innerText = 'Desconectar WhatsApp';
+                            actionBtn.className = 'btn btn-red';
+                        } else if (data.qr) {
+                            qrContainer.classList.remove('hidden');
+                            connectedContainer.classList.add('hidden');
+                            loadingContainer.classList.add('hidden');
+                            qrImg.src = data.qr;
+                            actionBtn.innerText = 'Reiniciar / Nuevo QR';
+                            actionBtn.className = 'btn btn-blue';
+                        } else {
+                            loadingContainer.classList.remove('hidden');
+                            qrContainer.classList.add('hidden');
+                            connectedContainer.classList.add('hidden');
+                            actionBtn.innerText = 'Reiniciar Servicio';
+                            actionBtn.className = 'btn btn-blue';
+                        }
+                    } catch (e) { console.error("Error actualizando status"); }
+                }
+
+                setInterval(updateStatus, 2000);
+                updateStatus();
+            </script>
         </body>
         </html>
     `);
@@ -119,33 +188,18 @@ app.get('/', (req, res) => {
 
 app.post('/logout', async (req, res) => {
     try {
-        console.log(`Acción de limpieza solicitada para ${INSTANCE_NAME}`);
-        
-        // 1. Intentamos cerrar la conexión limpiamente si existe
-        if (sock) {
-            sock.end(new Error("Reinicio solicitado"));
-        }
-
-        // 2. Borramos la carpeta de sesión
+        if (sock) sock.end();
         if (fs.existsSync(SESSION_FOLDER)) {
             fs.rmSync(SESSION_FOLDER, { recursive: true, force: true });
         }
-
-        // 3. Esperamos un poco y reiniciamos el proceso de WhatsApp sin apagar el servidor
-        setTimeout(() => {
-            startWhatsApp();
-        }, 2000);
-
-        res.send('<script>alert("Reiniciando instancia..."); window.location.href="/";</script>');
-    } catch (e) { 
-        res.send('Error al reiniciar.'); 
-    }
+        setTimeout(() => startWhatsApp(), 2000);
+        res.send('<script>window.location.href="/";</script>');
+    } catch (e) { res.send('Error.'); }
 });
 
 app.post('/send', async (req, res) => {
     const { jid, message } = req.body;
     try {
-        if (!sock) throw new Error("WhatsApp no iniciado");
         await sock.sendMessage(jid, { text: message });
         res.json({ status: 'sent' });
     } catch (e) { res.status(500).json({ error: e.message }); }
