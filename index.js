@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, disconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const express = require('express');
 const axios = require('axios');
 const pino = require('pino');
@@ -39,7 +39,7 @@ async function startWhatsApp() {
         
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            const shouldReconnect = statusCode !== disconnectReason.loggedOut;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             console.log(`Conexión cerrada en ${INSTANCE_NAME}. Reintentando: ${shouldReconnect}`);
             if (shouldReconnect) startWhatsApp();
         } else if (connection === 'open') {
@@ -93,3 +93,4 @@ app.listen(PORT, "0.0.0.0", () => {
     console.log(`Servidor de ${INSTANCE_NAME} escuchando en el puerto ${PORT}`);
     startWhatsApp().catch(err => console.log("Error al arrancar:", err));
 });
+
