@@ -1,7 +1,7 @@
 {
   "name": "mi-puente-whatsapp",
-  "version": "1.1.1",
-  "description": "Puente robusto con Audio y UI",
+  "version": "1.1.2",
+  "description": "Puente WhatsApp Estable",
   "main": "index.js",
   "dependencies": {
     "@whiskeysockets/baileys": "latest",
@@ -9,7 +9,6 @@
     "axios": "^1.6.0",
     "qrcode": "^1.5.3",
     "pino": "^8.16.0",
-    "qrcode-terminal": "^0.12.0",
     "form-data": "^4.0.0"
   },
   "scripts": {
