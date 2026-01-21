@@ -1,7 +1,7 @@
 {
   "name": "mi-puente-whatsapp",
-  "version": "1.1.0",
-  "description": "Puente con Audio y UI",
+  "version": "1.1.1",
+  "description": "Puente robusto con Audio y UI",
   "main": "index.js",
   "dependencies": {
     "@whiskeysockets/baileys": "latest",
