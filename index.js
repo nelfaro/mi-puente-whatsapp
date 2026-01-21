@@ -11,6 +11,7 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// VARIABLES
 const PORT = process.env.PORT || 3000;
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || 'https://neogen-n8n-n8n.8fevsr.easypanel.host/webhook/whatsapp-entrada';
 const INSTANCE_NAME = process.env.INSTANCE_NAME || 'WhatsApp-Principal';
@@ -21,34 +22,42 @@ let connectionStatus = "Iniciando...";
 let userNumber = null;
 let sock = null;
 
-async function startWhatsApp() {
-    if (sock) {
-        sock.ev.removeAllListeners();
-        try { sock.end(); } catch (e) {}
-        sock = null;
-    }
+// --- 1. ARRANCAMOS EL SERVIDOR WEB PRIMERO (Para evitar SIGTERM de Easypanel) ---
+app.listen(PORT, "0.0.0.0", () => {
+    console.log(`✅ Servidor Web de ${INSTANCE_NAME} listo en puerto ${PORT}`);
+    startWhatsApp(); // Iniciamos WhatsApp después de que el puerto ya esté abierto
+});
 
+async function startWhatsApp() {
+    console.log(`> Conectando a WhatsApp...`);
+    
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_FOLDER);
     
     sock = makeWASocket({
         auth: state,
         logger: pino({ level: 'silent' }),
+        printQRInTerminal: false 
     });
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
+        
         if (qr) {
             connectionStatus = "Esperando Escaneo";
             QRCode.toDataURL(qr, (err, url) => { qrCodeData = url; });
             qrcodeTerminal.generate(qr, { small: true });
         }
+        
         if (connection === 'close') {
             qrCodeData = null;
             userNumber = null;
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            
+            console.log(`Conexión cerrada. Razón: ${statusCode}. Reconectar: ${shouldReconnect}`);
+            
             if (shouldReconnect) {
                 connectionStatus = "Reconectando...";
                 setTimeout(() => startWhatsApp(), 5000);
@@ -61,6 +70,7 @@ async function startWhatsApp() {
             connectionStatus = "Conectado";
             qrCodeData = null;
             userNumber = sock.user.id.split(':')[0];
+            console.log(`✅ INSTANCIA CONECTADA: ${userNumber}`);
         }
     });
 
@@ -70,7 +80,6 @@ async function startWhatsApp() {
             const isAudio = !!msg.message.audioMessage;
             const texto = msg.message.conversation || msg.message.extendedTextMessage?.text;
 
-            // Preparamos el envío a n8n como FormData (para soportar archivos)
             const formData = new FormData();
             formData.append('instance', INSTANCE_NAME);
             formData.append('sender', msg.key.remoteJid);
@@ -78,18 +87,18 @@ async function startWhatsApp() {
 
             if (isAudio) {
                 try {
-                    console.log("Descargando audio recibido...");
+                    console.log("Procesando audio...");
                     const buffer = await downloadMediaMessage(msg, 'buffer', {});
                     formData.append('file', buffer, { filename: 'audio.ogg', contentType: 'audio/ogg' });
                     formData.append('texto', '[[AUDIO_MESSAGE]]');
                 } catch (err) {
-                    console.error("Error descargando audio:", err);
+                    console.error("Error descargando audio:", err.message);
                     return;
                 }
             } else if (texto) {
                 formData.append('texto', texto);
             } else {
-                return; // Ignorar otros tipos (stickers, imágenes) por ahora
+                return; 
             }
 
             try {
@@ -97,13 +106,13 @@ async function startWhatsApp() {
                     headers: { ...formData.getHeaders() }
                 });
             } catch (e) {
-                console.error("Error enviando a n8n:", e.message);
+                console.error("Error n8n:", e.message);
             }
         }
     });
 }
 
-// --- RUTAS DE LA INTERFAZ WEB ---
+// ENDPOINTS
 app.get('/status', (req, res) => res.json({ status: connectionStatus, qr: qrCodeData, number: userNumber }));
 
 app.get('/', (req, res) => {
@@ -119,7 +128,7 @@ app.get('/', (req, res) => {
                 .status-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 8px; }
                 .connected-icon { font-size: 4rem; color: #25D366; margin-bottom: 10px; }
                 img { width: 250px; margin: 1rem 0; border: 1px solid #ddd; padding: 10px; border-radius: 10px; }
-                .btn { color: white; border: none; padding: 12px 25px; border-radius: 10px; cursor: pointer; font-size: 1rem; width: 100%; transition: 0.3s; margin-top: 15px; }
+                .btn { color: white; border: none; padding: 12px 25px; border-radius: 10px; cursor: pointer; font-size: 1rem; width: 100%; transition: 0.3s; margin-top: 15px; text-decoration: none; display: block; }
                 .btn-red { background: #FF3B30; } .btn-blue { background: #007AFF; }
                 .hidden { display: none; }
             </style>
@@ -129,7 +138,7 @@ app.get('/', (req, res) => {
                 <h1>${INSTANCE_NAME}</h1>
                 <div id="status-container" style="font-weight:bold; margin-bottom:20px;">Cargando...</div>
                 <div id="qr-container" class="hidden"><p>Escanea el QR:</p><img id="qr-img" src=""></div>
-                <div id="connected-container" class="hidden"><div class="connected-icon">✅</div><p>Conectado:</p><div id="phone-number" style="font-weight:bold;"></div></div>
+                <div id="connected-container" class="hidden"><div class="connected-icon">✅</div><p>Vínculo:</p><div id="phone-number" style="font-size:1.2rem; font-weight:bold;"></div></div>
                 <form action="/logout" method="POST" onsubmit="return confirm('¿Desconectar?')"><button id="action-btn" class="btn btn-blue" type="submit">Reiniciar</button></form>
             </div>
             <script>
@@ -162,9 +171,11 @@ app.get('/', (req, res) => {
 });
 
 app.post('/logout', async (req, res) => {
-    if (sock) { try { await sock.logout(); } catch(e){} }
+    try {
+        if (sock) await sock.logout();
+    } catch(e) {}
     if (fs.existsSync(SESSION_FOLDER)) fs.rmSync(SESSION_FOLDER, { recursive: true, force: true });
-    setTimeout(() => startWhatsApp(), 3000);
+    setTimeout(() => startWhatsApp(), 2000);
     res.send('<script>window.location.href="/";</script>');
 });
 
@@ -175,6 +186,3 @@ app.post('/send', async (req, res) => {
         res.json({ status: 'sent' });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
-
-startWhatsApp();
-app.listen(PORT, "0.0.0.0");
