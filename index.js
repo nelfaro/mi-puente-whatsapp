@@ -20,17 +20,23 @@ let connectionStatus = "Desconectado";
 let userNumber = null;
 let sock = null;
 
-// Función para vaciar la carpeta sin borrarla (para evitar el error EBUSY de Docker)
+// Función para vaciar la carpeta (evita EBUSY al no borrar la carpeta raíz del volumen)
 function clearSession() {
     if (fs.existsSync(SESSION_FOLDER)) {
-        console.log("🧹 Vaciando archivos de sesión corruptos...");
-        fs.readdirSync(SESSION_FOLDER).forEach(file => {
+        console.log("🧹 Limpiando archivos de sesión conflictivos (Error 405)...");
+        const files = fs.readdirSync(SESSION_FOLDER);
+        for (const file of files) {
             try {
-                fs.unlinkSync(path.join(SESSION_FOLDER, file));
+                const filePath = path.join(SESSION_FOLDER, file);
+                if (fs.lstatSync(filePath).isDirectory()) {
+                    fs.rmSync(filePath, { recursive: true, force: true });
+                } else {
+                    fs.unlinkSync(filePath);
+                }
             } catch (e) {
-                console.log(`No se pudo borrar ${file}, probablemente en uso.`);
+                console.log(`No se pudo borrar ${file}: ${e.message}`);
             }
-        });
+        }
     }
 }
 
@@ -41,9 +47,9 @@ async function startWhatsApp() {
 
     sock = makeWASocket({
         auth: state,
-        logger: pino({ level: 'error' }), // Solo errores críticos para no ensuciar el log
+        logger: pino({ level: 'error' }),
         printQRInTerminal: false,
-        browser: ['Chrome (Linux)', 'Academia', '1.0'] // Identificador de navegador
+        browser: ['Chrome (Linux)', 'Academia', '1.0']
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -52,26 +58,29 @@ async function startWhatsApp() {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-            console.log("✨ Nuevo QR generado. Listando en la UI...");
+            console.log("✨ Nuevo QR generado satisfactoriamente.");
             connectionStatus = "Esperando Escaneo";
             qrCodeData = await QRCode.toDataURL(qr);
         }
 
         if (connection === 'close') {
             qrCodeData = null;
-            const error = lastDisconnect?.error;
-            const statusCode = error?.output?.statusCode;
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
             
-            console.log(`⚠️ Conexión cerrada. Motivo: ${statusCode}`);
+            console.log(`⚠️ Conexión cerrada. Código de estado: ${statusCode}`);
             
-            // Si la sesión ya no sirve, limpiamos todo
-            if (statusCode === DisconnectReason.loggedOut || statusCode === 401) {
-                console.log("❌ Sesión inválida/cerrada. Limpiando datos...");
-                connectionStatus = "Sesión Inválida";
+            // EL CAMBIO CLAVE: Incluir 405, 403 y otros fallos críticos
+            const logicErrors = [DisconnectReason.loggedOut, 401, 403, 405, 440];
+            
+            if (logicErrors.includes(statusCode)) {
+                console.log("❌ Sesión irrecuperable detectada. Reseteando archivos...");
+                connectionStatus = "Sesión Expirada";
                 clearSession();
+                // Esperamos un poco para que el sistema de archivos se libere
                 setTimeout(() => startWhatsApp(), 5000);
             } else {
-                console.log("Reintentando conexión en 5 segundos...");
+                console.log("Reintentando conexión automática...");
+                connectionStatus = "Reconectando";
                 setTimeout(() => startWhatsApp(), 5000);
             }
         } else if (connection === 'open') {
@@ -82,7 +91,7 @@ async function startWhatsApp() {
         }
     });
 
-    // Lógica de mensajes (se mantiene igual)
+    // Lógica de mensajes
     sock.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
         if (!msg.key.fromMe && msg.message) {
@@ -106,25 +115,20 @@ async function startWhatsApp() {
     });
 }
 
-// Servidor Express (Endpoints)
+// Endpoints y Servidor
 app.get('/status', (req, res) => res.json({ status: connectionStatus, qr: qrCodeData, number: userNumber }));
-app.get('/', (req, res) => res.send("Servidor Activo. Ve a /status para ver el estado o usa la UI."));
-app.post('/logout', async (req, res) => {
-    console.log("Cerrando sesión solicitado...");
-    clearSession();
-    if (sock) try { await sock.logout(); } catch(e) {}
-    res.send('<script>window.location.href="/";</script>');
-});
+app.get('/', (req, res) => res.send("Puente Activo"));
+app.post('/logout', (req, res) => { clearSession(); res.send("OK"); process.exit(0); });
 app.post('/send', async (req, res) => {
     const { jid, message } = req.body;
     try {
-        if (!sock) return res.status(500).json({ error: "WhatsApp no conectado" });
+        if (!sock) return res.status(500).json({ error: "WhatsApp no iniciado" });
         await sock.sendMessage(jid, { text: message });
         res.json({ status: 'sent' });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-    console.log(`✅ Servidor Web listo en puerto ${PORT}`);
+    console.log(`✅ Servidor Web en puerto ${PORT}`);
     startWhatsApp();
 });
