@@ -121,6 +121,10 @@ async function startWhatsApp() {
                 formData.append('instance', INSTANCE_NAME);
                 formData.append('sender', msg.key.remoteJid);
                 formData.append('nombre', msg.pushName || 'Contacto');
+                // ✅ NUEVOS CAMPOS (ÚNICO CAMBIO REAL)
+                formData.append('messageTimestamp', msg.messageTimestamp ? msg.messageTimestamp * 1000 : Date.now());
+                formData.append('messageId', msg.key.id || '');
+                formData.append('fromMe', msg.key.fromMe ? 'true' : 'false');
 
                 if (multimedia) {
                     try {
