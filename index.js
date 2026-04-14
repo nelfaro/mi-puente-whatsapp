@@ -25,7 +25,7 @@ const upload = multer({ dest: '/tmp/' });
 const PORT = process.env.PORT || 3000;
 const N8N_WEBHOOK_URL = process.env.N8N_WEBHOOK_URL || 'https://agentes-n8n.xjkmv6.easypanel.host/webhook/whatsapp-entrada';
 const INSTANCE_NAME = process.env.INSTANCE_NAME || 'WhatsApp-Principal';
-const SESSION_FOLDER = '/app/auth_info'; 
+const SESSION_FOLDER = process.env.SESSION_FOLDER || '/app/auth_info';
 
 let qrCodeData = null;
 let connectionStatus = "Desconectado";
