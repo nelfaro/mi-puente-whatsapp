@@ -141,53 +141,64 @@ app.post('/logout', (req, res) => {
 // --- EL NUEVO ENDPOINT UNIVERSAL (Acepta Texto, imagen en base64 (texto) y Archivos desde n8n) ---
 app.post('/send', upload.single('file'), async (req, res) => {
     try {
+        // Extraemos los datos del body
         const { jid, type, message, caption, filename, image } = req.body;
 
         if (!sock) return res.status(500).json({ error: "Servicio no listo" });
 
-        // --- OPCIÓN 1: IMAGEN (Base64 o URL) ---
+        // --- LÓGICA DE ENVÍO DE IMAGEN ---
         if (type === 'image' || image) {
             let mediaContent;
-            
-            if (image && image.startsWith('data:image')) {
-                // Es Base64
-                const base64Data = image.split(',')[1];
+
+            if (typeof image === 'string' && image.startsWith('data:image')) {
+                // 1. Extraer solo el contenido base64 (quitando el prefijo data:image/xxx;base64,)
+                const base64Data = image.replace(/^data:image\/\w+;base64,/, "");
+                // 2. Convertir a Buffer (Binario)
                 mediaContent = Buffer.from(base64Data, 'base64');
-            } else if (image) {
-                // Es una URL
+            } 
+            else if (typeof image === 'string' && image.startsWith('http')) {
+                // Es una URL externa
                 mediaContent = { url: image };
-            } else if (req.file) {
-                // Es un archivo subido físicamente
-                mediaContent = { url: req.file.path };
+            } 
+            else if (req.file) {
+                // Es un archivo subido por Multer (físico)
+                mediaContent = fs.readFileSync(req.file.path);
             }
 
+            if (!mediaContent) throw new Error("No se pudo determinar el contenido de la imagen");
+
+            // Enviamos a WhatsApp
             await sock.sendMessage(jid, { 
                 image: mediaContent, 
                 caption: caption || message || '' 
             });
 
-            if (req.file) fs.unlinkSync(req.file.path); // Limpiar temporal
+            // Si se creó un archivo temporal, lo borramos
+            if (req.file) fs.unlinkSync(req.file.path);
+            
+            return res.json({ status: 'sent', type: 'image' });
         } 
         
-        // --- OPCIÓN 2: DOCUMENTO / PDF ---
+        // --- LÓGICA DE ENVÍO DE DOCUMENTO ---
         else if (type === 'document' && req.file) {
             await sock.sendMessage(jid, {
-                document: { url: req.file.path },
+                document: fs.readFileSync(req.file.path),
                 mimetype: 'application/pdf',
                 fileName: filename || 'Documento.pdf',
                 caption: caption || ''
             });
             fs.unlinkSync(req.file.path);
+            return res.json({ status: 'sent', type: 'document' });
         } 
         
-        // --- OPCIÓN 3: TEXTO SIMPLE ---
+        // --- LÓGICA DE TEXTO SIMPLE ---
         else {
             await sock.sendMessage(jid, { text: message });
+            return res.json({ status: 'sent', type: 'text' });
         }
         
-        res.json({ status: 'sent' });
     } catch (e) { 
-        console.error("Error enviando mensaje:", e);
+        console.error("Error detallado enviando mensaje:", e);
         res.status(500).json({ error: e.message }); 
     }
 });
