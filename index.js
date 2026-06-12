@@ -16,7 +16,8 @@ const path = require('path');
 const multer = require('multer'); // <-- NUEVA LIBRERÍA PARA RECIBIR ARCHIVOS
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '50mb' })); // <-- Aumenta el límite para recibir imágenes pesadas
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Configuración para recibir archivos temporales de n8n
 const upload = multer({ dest: '/tmp/' });
@@ -137,33 +138,56 @@ app.post('/logout', (req, res) => {
     setTimeout(() => startWhatsApp(), 2000);
 });
 
-// --- EL NUEVO ENDPOINT UNIVERSAL (Acepta Texto y Archivos desde n8n) ---
+// --- EL NUEVO ENDPOINT UNIVERSAL (Acepta Texto, imagen en base64 (texto) y Archivos desde n8n) ---
 app.post('/send', upload.single('file'), async (req, res) => {
     try {
-        const jid = req.body.jid;
-        const type = req.body.type || 'text'; // Puede ser 'text' o 'document'
-        const message = req.body.message;
+        const { jid, type, message, caption, filename, image } = req.body;
 
         if (!sock) return res.status(500).json({ error: "Servicio no listo" });
 
-        // Si n8n manda un PDF (Ticketera)
-        if (type === 'document' && req.file) {
+        // --- OPCIÓN 1: IMAGEN (Base64 o URL) ---
+        if (type === 'image' || image) {
+            let mediaContent;
+            
+            if (image && image.startsWith('data:image')) {
+                // Es Base64
+                const base64Data = image.split(',')[1];
+                mediaContent = Buffer.from(base64Data, 'base64');
+            } else if (image) {
+                // Es una URL
+                mediaContent = { url: image };
+            } else if (req.file) {
+                // Es un archivo subido físicamente
+                mediaContent = { url: req.file.path };
+            }
+
+            await sock.sendMessage(jid, { 
+                image: mediaContent, 
+                caption: caption || message || '' 
+            });
+
+            if (req.file) fs.unlinkSync(req.file.path); // Limpiar temporal
+        } 
+        
+        // --- OPCIÓN 2: DOCUMENTO / PDF ---
+        else if (type === 'document' && req.file) {
             await sock.sendMessage(jid, {
                 document: { url: req.file.path },
                 mimetype: 'application/pdf',
-                fileName: req.body.filename || 'Documento.pdf',
-                caption: req.body.caption || ''
+                fileName: filename || 'Documento.pdf',
+                caption: caption || ''
             });
-            // Borramos el archivo temporal del servidor para no llenar el disco
             fs.unlinkSync(req.file.path);
         } 
-        // Si n8n manda texto normal (IA)
+        
+        // --- OPCIÓN 3: TEXTO SIMPLE ---
         else {
             await sock.sendMessage(jid, { text: message });
         }
         
         res.json({ status: 'sent' });
     } catch (e) { 
+        console.error("Error enviando mensaje:", e);
         res.status(500).json({ error: e.message }); 
     }
 });
